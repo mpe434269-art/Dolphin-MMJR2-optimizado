@@ -1,0 +1,79 @@
+name: Build APK (MMJR2 optimizado)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 300
+
+    steps:
+      - name: Liberar espacio en disco
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc || true
+          df -h /
+
+      - name: Descargar el zip desde el Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.0 --repo "${{ github.repository }}" --pattern "*.zip" --dir /tmp/dl
+          ls -la /tmp/dl
+          mkdir -p "$HOME/src"
+          unzip -q /tmp/dl/*.zip -d "$HOME/src"
+          CM=$(find "$HOME/src" -maxdepth 3 -name CMakeLists.txt -path "*/*/CMakeLists.txt" | head -1)
+          echo "SRC=$(dirname "$CM")" >> "$GITHUB_ENV"
+
+      - name: Comprobar que es la versión optimizada
+        run: |
+          f="$SRC/Source/Android/app/src/main/java/org/dolphinemu/dolphinemu/utils/AutoPerformanceProfile.java"
+          if [ ! -f "$f" ]; then
+            echo "::error::El zip del Release es el ORIGINAL (sin las optimizaciones). Sube Dolphin-MMJR2-optimizado.zip al Release."
+            exit 1
+          fi
+          grep -q "DCMAKE_BUILD_TYPE=Release" "$SRC/Source/Android/app/build.gradle"
+
+      - name: Descargar mGBA (submódulo que falta)
+        run: |
+          if [ -z "$(ls -A "$SRC/Externals/mGBA/mgba" 2>/dev/null)" ]; then
+            rm -rf "$SRC/Externals/mGBA/mgba"
+            git clone --depth 1 https://github.com/mgba-emu/mgba.git "$SRC/Externals/mGBA/mgba"
+          fi
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Instalar NDK y CMake
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;26.1.10909125" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Crear llave de firma
+        working-directory: ${{ env.SRC }}/Source/Android
+        run: |
+          keytool -genkeypair -keystore "$PWD/release.jks" -storepass android123 \
+            -keypass android123 -alias mmjr -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=MMJR, OU=Dev, O=Dev, L=X, S=X, C=US"
+          printf 'storeFile=%s\nstorePassword=android123\nkeyAlias=mmjr\nkeyPassword=android123\n' \
+            "$PWD/release.jks" > keystore.properties
+
+      - name: Compilar APK release
+        working-directory: ${{ env.SRC }}/Source/Android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Subir APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dolphin-MMJR2-optimizado-apk
+          path: ${{ env.SRC }}/Source/Android/app/build/outputs/apk/release/*.apk
+          
