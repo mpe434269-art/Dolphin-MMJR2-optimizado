@@ -53,13 +53,13 @@ jobs:
           [ "$ok" = 1 ] || { echo "::error::No pude clonar el repo original para los subm贸dulos"; exit 1; }
           cd upstream
           PATHS=$(git config -f .gitmodules --get-regexp '\.path$' | awk '{print $2}' | grep -v -E 'Externals/(Qt|FFmpeg-bin)$')
-          git submodule update --init --depth 1 $PATHS
+          git submodule update --init --recursive --depth 1 $PATHS
           for p in $PATHS; do
             if [ -d "$p" ] && [ -n "$(ls -A "$p")" ]; then
               rm -rf "$SRC/$p"
               mkdir -p "$(dirname "$SRC/$p")"
               cp -a "$p" "$SRC/$p"
-              rm -rf "$SRC/$p/.git"
+              find "$SRC/$p" -name .git -prune -exec rm -rf {} +
             else
               echo "::warning::Subm贸dulo vac铆o: $p"
             fi
