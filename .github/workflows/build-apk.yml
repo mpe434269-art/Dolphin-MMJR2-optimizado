@@ -37,6 +37,18 @@ jobs:
           fi
           grep -q "DCMAKE_BUILD_TYPE=Release" "$SRC/Source/Android/app/build.gradle"
 
+      - name: Preparar git y corregir build.gradle
+        run: |
+          cd "$SRC"
+          # El build.gradle usa git para el número de versión y su manejo de error está roto
+          sed -i "s/logger.error(e + ':/logger.error(e.toString() + ':/" Source/Android/app/build.gradle
+          git init -q
+          git config user.email "ci@example.com"
+          git config user.name "ci"
+          git add -A >/dev/null 2>&1
+          git commit -q -m "build" >/dev/null 2>&1 || true
+          git rev-list --first-parent --count HEAD
+
       - name: Descargar mGBA (submódulo que falta)
         run: |
           if [ -z "$(ls -A "$SRC/Externals/mGBA/mgba" 2>/dev/null)" ]; then
@@ -76,4 +88,3 @@ jobs:
         with:
           name: Dolphin-MMJR2-optimizado-apk
           path: ${{ env.SRC }}/Source/Android/app/build/outputs/apk/release/*.apk
-          
