@@ -28,7 +28,7 @@ jobs:
           CM=$(find "$HOME/src" -maxdepth 3 -name CMakeLists.txt -path "*/*/CMakeLists.txt" | head -1)
           echo "SRC=$(dirname "$CM")" >> "$GITHUB_ENV"
 
-      - name: Comprobar que es la versión optimizada
+      - name: Comprobar que es la versi贸n optimizada
         run: |
           f="$SRC/Source/Android/app/src/main/java/org/dolphinemu/dolphinemu/utils/AutoPerformanceProfile.java"
           if [ ! -f "$f" ]; then
@@ -37,24 +37,45 @@ jobs:
           fi
           grep -q "DCMAKE_BUILD_TYPE=Release" "$SRC/Source/Android/app/build.gradle"
 
+      # El zip de GitHub NO trae los subm贸dulos (Externals/*): vienen vac铆os.
+      # Los descargamos del repo original en las versiones exactas que fija ese repo.
+      - name: Descargar subm贸dulos (Externals)
+        run: |
+          set -e
+          cd /tmp
+          ok=0
+          for url in \
+            "https://github.com/Medard22/Dolphin-MMJR2-VBI.git" \
+            "https://github.com/Lumince/Dolphin-MMJR2.git"; do
+            rm -rf upstream
+            if git clone --depth 1 "$url" upstream; then ok=1; break; fi
+          done
+          [ "$ok" = 1 ] || { echo "::error::No pude clonar el repo original para los subm贸dulos"; exit 1; }
+          cd upstream
+          PATHS=$(git config -f .gitmodules --get-regexp '\.path$' | awk '{print $2}' | grep -v -E 'Externals/(Qt|FFmpeg-bin)$')
+          git submodule update --init --depth 1 $PATHS
+          for p in $PATHS; do
+            if [ -d "$p" ] && [ -n "$(ls -A "$p")" ]; then
+              rm -rf "$SRC/$p"
+              mkdir -p "$(dirname "$SRC/$p")"
+              cp -a "$p" "$SRC/$p"
+              rm -rf "$SRC/$p/.git"
+            else
+              echo "::warning::Subm贸dulo vac铆o: $p"
+            fi
+          done
+          echo "Subm贸dulos que siguen vac铆os:"
+          for p in $PATHS; do [ -z "$(ls -A "$SRC/$p" 2>/dev/null)" ] && echo " - $p"; done || true
+
       - name: Preparar git y corregir build.gradle
         run: |
           cd "$SRC"
-          # El build.gradle usa git para el número de versión y su manejo de error está roto
           sed -i "s/logger.error(e + ':/logger.error(e.toString() + ':/" Source/Android/app/build.gradle
           git init -q
           git config user.email "ci@example.com"
           git config user.name "ci"
           git add -A >/dev/null 2>&1
           git commit -q -m "build" >/dev/null 2>&1 || true
-          git rev-list --first-parent --count HEAD
-
-      - name: Descargar mGBA (submódulo que falta)
-        run: |
-          if [ -z "$(ls -A "$SRC/Externals/mGBA/mgba" 2>/dev/null)" ]; then
-            rm -rf "$SRC/Externals/mGBA/mgba"
-            git clone --depth 1 https://github.com/mgba-emu/mgba.git "$SRC/Externals/mGBA/mgba"
-          fi
 
       - name: Java 17
         uses: actions/setup-java@v4
@@ -81,7 +102,24 @@ jobs:
         working-directory: ${{ env.SRC }}/Source/Android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          set +e
+          ./gradlew assembleRelease --no-daemon --console=plain 2>&1 | tee "$HOME/build.log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" != 0 ]; then
+            echo "=================== RESUMEN DEL ERROR ==================="
+            grep -n -A15 "What went wrong" "$HOME/build.log" | head -60
+            echo "----- l铆neas con error -----"
+            grep -n -i -E "CMake Error|error:|fatal error|undefined reference|No such file|FAILED" "$HOME/build.log" | head -40
+          fi
+          exit $code
+
+      - name: Subir log (siempre)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ~/build.log
+          if-no-files-found: ignore
 
       - name: Subir APK
         uses: actions/upload-artifact@v4
